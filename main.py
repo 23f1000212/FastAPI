@@ -2,17 +2,29 @@ import os
 import yaml
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 
+# -----------------------------
+# Load .env
+# -----------------------------
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="12-Factor Config Service")
 
-# Simulate the OS environment variables given in the assignment.
-# Remove these two lines if you actually set APP_DEBUG and APP_API_KEY
-# in your deployment environment.
-os.environ.setdefault("APP_DEBUG", "true")
-os.environ.setdefault("APP_API_KEY", "key-q10bkg4x34")
+# -----------------------------
+# Enable CORS
+# -----------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# -----------------------------
+# Default configuration
+# -----------------------------
 DEFAULTS = {
     "port": 8000,
     "workers": 1,
@@ -21,9 +33,16 @@ DEFAULTS = {
     "api_key": "default-secret-000",
 }
 
-
+# -----------------------------
+# Helper functions
+# -----------------------------
 def to_bool(value):
-    return str(value).lower() in ["true", "1", "yes", "on"]
+    return str(value).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
 
 
 def coerce(key, value):
@@ -36,32 +55,49 @@ def coerce(key, value):
     return str(value)
 
 
+# -----------------------------
+# Endpoint
+# -----------------------------
 @app.get("/effective-config")
 def effective_config(set: list[str] | None = Query(default=None)):
+
     config = DEFAULTS.copy()
 
+    # -------------------------
     # YAML layer
-    with open("config.development.yaml") as f:
-        yaml_config = yaml.safe_load(f)
+    # -------------------------
+    if os.path.exists("config.development.yaml"):
+        with open("config.development.yaml", "r") as f:
+            yaml_config = yaml.safe_load(f) or {}
 
-    for k, v in yaml_config.items():
-        config[k] = coerce(k, v)
+        for key, value in yaml_config.items():
+            config[key] = coerce(key, value)
 
+    # -------------------------
     # .env layer
+    # -------------------------
     for key, value in os.environ.items():
 
         if key == "NUM_WORKERS":
             config["workers"] = int(value)
 
-    # APP_* layer
+        elif key in config:
+            config[key] = coerce(key, value)
+
+    # -------------------------
+    # APP_* environment variables
+    # -------------------------
     for key, value in os.environ.items():
 
         if key.startswith("APP_"):
-            actual = key[4:].lower()
 
-            config[actual] = coerce(actual, value)
+            actual_key = key[4:].lower()
 
+            config[actual_key] = coerce(actual_key, value)
+
+    # -------------------------
     # CLI overrides
+    # -------------------------
     if set:
 
         for item in set:
@@ -69,11 +105,20 @@ def effective_config(set: list[str] | None = Query(default=None)):
             if "=" not in item:
                 continue
 
-            k, v = item.split("=", 1)
+            key, value = item.split("=", 1)
 
-            config[k] = coerce(k, v)
+            config[key] = coerce(key, value)
 
+    # -------------------------
     # Mask secret
+    # -------------------------
     config["api_key"] = "****"
 
     return config
+
+
+@app.get("/")
+def home():
+    return {
+        "message": "12-Factor Config Service Running"
+    }
